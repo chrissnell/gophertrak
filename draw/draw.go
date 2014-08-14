@@ -30,7 +30,7 @@ type Style struct {
 }
 
 var (
-	tbmu sync.Mutex
+	Mu sync.Mutex
 
 	Black Style = Style{
 		Fg: termbox.ColorBlack,
@@ -103,6 +103,8 @@ func Init() {
 }
 
 func Size() (int, int) {
+	Mu.Lock()
+	defer Mu.Unlock()
 	x, y := termbox.Size()
 	x--
 	y--
@@ -110,20 +112,24 @@ func Size() (int, int) {
 }
 
 func SafeFlush() {
-	tbmu.Lock()
-	defer tbmu.Unlock()
+	Mu.Lock()
+	defer Mu.Unlock()
 	termbox.Flush()
 }
 
 func Blank(leftX, rightX, y int, s Style) {
+	Mu.Lock()
+	defer Mu.Unlock()
 	for x := leftX; x <= rightX; x++ {
 		termbox.SetCell(x, y, ' ', s.Fg, s.Bg)
 	}
 }
 
 func HorizLine(leftX, rightX, y int, ls LineStyle, s Style) {
-
 	var horizChar rune
+
+	Mu.Lock()
+	defer Mu.Unlock()
 
 	switch ls {
 	case 0:
@@ -144,6 +150,8 @@ func HorizLine(leftX, rightX, y int, ls LineStyle, s Style) {
 func TitledBox(topLeftX, topLeftY, botRightX, botRightY int, ls LineStyle, s, ts Style, title string) {
 	var horizChar, vertChar, leftTitleChar, rightTitleChar rune
 	var topLeftChar, topRightChar, botLeftChar, botRightChar rune
+
+	Mu.Lock()
 
 	switch ls {
 	case 0:
@@ -200,8 +208,12 @@ func TitledBox(topLeftX, topLeftY, botRightX, botRightY int, ls LineStyle, s, ts
 	termbox.SetCell(topLeftX+1, topLeftY, horizChar, s.Fg, s.Bg)
 	termbox.SetCell(topLeftX+2, topLeftY, leftTitleChar, s.Fg, s.Bg)
 	termbox.SetCell(topLeftX+3, topLeftY, ' ', s.Fg, s.Bg)
+	Mu.Unlock()
+
 	PrintText(topLeftX+4, topLeftY, ts, title)
 	startRestOfLine := topLeftX + 2 + utf8.RuneCount([]byte(title)) + 3
+
+	Mu.Lock()
 	termbox.SetCell(startRestOfLine-1, topLeftY, ' ', s.Fg, s.Bg)
 	termbox.SetCell(startRestOfLine, topLeftY, rightTitleChar, s.Fg, s.Bg)
 	for x := startRestOfLine + 1; x <= botRightX-1; x++ {
@@ -225,9 +237,14 @@ func TitledBox(topLeftX, topLeftY, botRightX, botRightY int, ls LineStyle, s, ts
 		}
 	}
 
+	Mu.Unlock()
 }
 
 func PrintText(x, y int, s Style, t string) {
+
+	Mu.Lock()
+	defer Mu.Unlock()
+
 	for _, c := range t {
 		termbox.SetCell(x, y, c, s.Fg, s.Bg)
 		x++
