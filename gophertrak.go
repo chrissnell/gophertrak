@@ -10,7 +10,7 @@ import (
 	"log"
 	"math"
 	"os"
-	"strconv"
+	"regexp"
 	"time"
 )
 
@@ -90,10 +90,14 @@ func main() {
 		switch ev := termbox.PollEvent(); ev.Type {
 		case termbox.EventKey:
 			if ev.Key == termbox.KeyCtrlS {
+				draw.Mu.Lock()
 				termbox.Sync()
+				draw.Mu.Unlock()
 			}
 			if ev.Key == termbox.KeyEsc {
+				draw.Mu.Lock()
 				termbox.Close()
+				draw.Mu.Unlock()
 				return
 			}
 		}
@@ -231,6 +235,7 @@ func DrawMyChaseVehicleReadings(g *gps.GPSReading) {
 			alt := fmt.Sprintf("%s feet", humanize.Comma(int64(p.Altitude)))
 			spd := fmt.Sprintf("%.0f mph", p.Speed)
 			crs := fmt.Sprintf("%v°", p.Heading)
+
 			draw.Blank(38, 51, 5, draw.Black)
 			draw.Blank(38, 51, 6, draw.Black)
 			draw.Blank(38, 51, 7, draw.Black)
@@ -250,6 +255,9 @@ func DrawMyChaseVehicleReadings(g *gps.GPSReading) {
 func DrawStatusBar(x_size, y_size int) {
 	draw.PrintText(2, y_size, draw.BlueText, "╡")
 	draw.PrintText(x_size-2, y_size, draw.BlueText, "╞")
+
+	draw.Mu.Lock()
+
 	termbox.SetCell(3, y_size, ' ', termbox.ColorBlack, termbox.ColorBlack)
 	termbox.SetCell(x_size-3, y_size, ' ', termbox.ColorBlack, termbox.ColorBlack)
 
@@ -257,8 +265,9 @@ func DrawStatusBar(x_size, y_size int) {
 		termbox.SetCell(x, y_size, ' ', termbox.ColorWhite|termbox.AttrBold, termbox.ColorBlue)
 	}
 
+	draw.Mu.Unlock()
+
 	draw.PrintText(4, y_size, draw.WhiteOnBlueText, "TNC: 127.0.0.1:6700")
-	draw.PrintText(24, y_size, draw.YellowOnBlueText, "√")
 
 	draw.PrintText(27, y_size, draw.WhiteOnBlueText, "GPS: 127.0.0.1:2947")
 	draw.PrintText(47, y_size, draw.YellowOnBlueText, "√")
@@ -271,7 +280,6 @@ func DrawStatusBar(x_size, y_size int) {
 
 	draw.PrintText(85, y_size, draw.YellowOnBlueText, "[ESC]")
 	draw.PrintText(91, y_size, draw.CyanOnBlueText, "Exit")
-
 }
 
 func DrawRecentPacketsTable() {
@@ -279,24 +287,41 @@ func DrawRecentPacketsTable() {
 	draw.PrintText(3, 18, draw.CyanTitle, "TIME   ")
 	draw.PrintText(12, 18, draw.CyanTitle, "TYPE   ")
 	draw.PrintText(21, 18, draw.CyanTitle, "CONTENTS                                                    ")
-
 }
 
 func DrawRecentPackets(pr *PacketRing, width int) {
-	rl := pr.r.Len()
 	for {
-		for i := 1; i <= rl; i++ {
-			if pr.r.Value != nil {
-				pkt := pr.r.Value.(PayloadPacket)
-				age := strconv.Itoa(int(time.Now().Unix()-pkt.ts.Unix())) + "s"
-				draw.Blank(3, width-2, 17+i, draw.Black)
-				draw.PrintText(3, 17+i, draw.WhiteText, age)
-				draw.PrintText(21, 17+i, draw.WhiteText, pkt.pkt.OriginalBody)
+		var recent []PayloadPacket
+		pr.Lock()
+		pr.r.Do(func(x interface{}) {
+			if x != nil {
+				recent = append(recent, x.(PayloadPacket))
 			}
-			pr.r = pr.r.Next()
+		})
+		pr.Unlock()
+
+		i := 19
+		for k, v := range recent {
+			//age := strconv.Itoa(int(time.Now().Unix()-v.ts.Unix())) + "s"
+
+			tr := regexp.MustCompile(`(.*)\..*(.)$`)
+			matches := tr.FindStringSubmatch(time.Since(v.ts).String())
+			timePadded := fmt.Sprintf("%7s", matches[1]+matches[2])
+			var pktType string
+			if v.data.Position.Lat != 0 && ((v.data.CompressedTelemetry.A1 != 0) || (v.data.StandardTelemetry.A1 != 0)) {
+				pktType = "POS+TLM"
+			} else if v.data.Position.Lat != 0 {
+				pktType = "POS"
+			} else if v.data.Message.Recipient.Callsign != "" {
+				pktType = "MSG"
+			}
+
+			draw.Blank(3, width-2, i+k, draw.Black)
+			draw.PrintText(3, i+k, draw.WhiteText, timePadded)
+			draw.PrintText(12, i+k, draw.WhiteText, pktType)
+			draw.PrintText(21, i+k, draw.WhiteText, v.pkt.OriginalBody)
 		}
-		draw.SafeFlush()
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 }
 

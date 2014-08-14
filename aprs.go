@@ -15,16 +15,17 @@ import (
 
 type APRSTNC struct {
 	wg           sync.WaitGroup
-	remotetnc    *string
-	beaconint    *string
-	conn         net.Conn
 	pr           PacketRing
 	pos          PayloadPosition
-	aprsMessage  chan string
+	conn         net.Conn
 	aprsPosition chan geospatial.Point
+	aprsMessage  chan string
+	concerned    map[string]bool // Callsigns that we want to listen for
+	connected    bool
+	remotetnc    *string
+	beaconint    *string
 	symbolTable  rune
 	symbolCode   rune
-	concerned    map[string]bool // Callsigns that we want to listen for
 }
 
 type PayloadPosition struct {
@@ -33,8 +34,8 @@ type PayloadPosition struct {
 }
 
 type PacketRing struct {
-	r  *ring.Ring
-	mu sync.Mutex
+	r *ring.Ring
+	sync.Mutex
 }
 
 type PayloadPacket struct {
@@ -58,39 +59,38 @@ func (p *PayloadPosition) Get() geospatial.Point {
 func (a *APRSTNC) StartAPRS() {
 	log.Println("APRS.StartAPRS()")
 
+	a.pr.Lock()
 	a.pr.r = ring.New(10)
+	a.pr.Unlock()
 	a.aprsMessage = make(chan string)
 	a.aprsPosition = make(chan geospatial.Point)
 	a.concerned = make(map[string]bool)
 
-	for {
-		err := a.connectToNetworkTNC()
-		if err != nil {
-			log.Printf("Error connecting to TNC: %v.  Sleeping 5sec and trying again.\n", err)
-			time.Sleep(5 * time.Second)
-			continue
-		} else {
-			log.Printf("Connection to network TNC %v successful", *a.remotetnc)
-			break
-		}
-	}
+	// Block on setting up a new connection to the TNC
+	a.connectToNetworkTNC()
 
 	go a.incomingAPRSEventHandler()
 	go a.outgoingAPRSEventHandler()
 
 }
 
-func (a *APRSTNC) connectToNetworkTNC() error {
+func (a *APRSTNC) connectToNetworkTNC() {
 
 	var err error
 
 	log.Println("aprs::connectToNetworkTNC()")
 
-	a.conn, err = net.Dial("tcp", *a.remotetnc)
-	if err != nil {
-		return fmt.Errorf("Could not connect to %v.  Error: %v", a.remotetnc, err)
+	for {
+		a.conn, err = net.Dial("tcp", *a.remotetnc)
+		if err != nil {
+			log.Printf("Could not connect to %v.  Error: %v", *a.remotetnc, err)
+			log.Println("Sleeping 5 seconds and trying again")
+			time.Sleep(5 * time.Second)
+		} else {
+			log.Printf("Connection to TNC %v successful", *a.remotetnc)
+			return
+		}
 	}
-	return nil
 }
 
 func (a *APRSTNC) incomingAPRSEventHandler() {
@@ -109,33 +109,47 @@ func (a *APRSTNC) incomingAPRSEventHandler() {
 	a.concerned[balloon] = true
 	a.concerned[chaser] = true
 
-	d := ax25.NewDecoder(a.conn)
-
 	for {
 
-		// Retrieve a packet
-		msg, err := d.Next()
-		if err != nil {
-			log.Printf("Error retrieving APRS message via KISS: %v", err)
+		// We loop the creation of this decoder so that it is recreated in the event that
+		// the connection fails and we have to reconnect, creating a new a.conn and thus
+		// necessitating a new Decoder over that new conn.
+		d := ax25.NewDecoder(a.conn)
+
+		for {
+
+			// Retrieve a packet
+			msg, err := d.Next()
+			if err != nil {
+				log.Printf("Error retrieving APRS message via KISS: %v", err)
+				log.Println("Attempting to reconnect to TNC")
+				// Reconnect to the TNC and break this inner loop so that a new Decoder
+				// is created over the new connection
+				a.connectToNetworkTNC()
+				break
+			}
+
+			log.Printf("Incoming APRS packet received: %+v\n", msg)
+
+			// Parse the packet
+			ad := aprs.ParsePacket(&msg)
+
+			// If this packet is from a source that we care about, add it to our ring
+			if a.concerned[msg.Source.String()] {
+				a.pr.Lock()
+				a.pr.r = a.pr.r.Prev()
+				a.pr.r.Value = PayloadPacket{data: *ad, pkt: msg, ts: time.Now()}
+				a.pr.Unlock()
+			}
+
+			if ad.Position.Lon != 0 {
+				log.Printf("Position packet received.  Lat: %v  Lon: %v\n", ad.Position.Lat, ad.Position.Lon)
+				a.pos.Set(ad.Position)
+			}
+
+			// Send to channel to be consumed by Recent Packets
+
 		}
-
-		log.Printf("Incoming APRS packet received: %+v\n", msg)
-
-		// Parse the packet
-		ad := aprs.ParsePacket(&msg)
-
-		// If this packet is from a source that we care about, add it to our ring
-		if a.concerned[msg.Source.String()] {
-			a.pr.r.Value = PayloadPacket{data: *ad, pkt: msg, ts: time.Now()}
-			a.pr.r = a.pr.r.Prev()
-		}
-
-		if ad.Position.Lon != 0 {
-			log.Printf("Position packet received.  Lat: %v  Lon: %v\n", ad.Position.Lat, ad.Position.Lon)
-			a.pos.Set(ad.Position)
-		}
-
-		// Send to channel to be consumed by Recent Packets
 
 	}
 }
