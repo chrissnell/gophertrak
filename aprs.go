@@ -14,18 +14,21 @@ import (
 )
 
 type APRSTNC struct {
-	wg           sync.WaitGroup
-	pr           PacketRing
-	pos          PayloadPosition
-	conn         net.Conn
-	aprsPosition chan geospatial.Point
-	aprsMessage  chan string
-	concerned    map[string]bool // Callsigns that we want to listen for
-	connected    bool
-	remotetnc    *string
-	beaconint    *string
-	symbolTable  rune
-	symbolCode   rune
+	wg              sync.WaitGroup
+	pr              PacketRing
+	pos             PayloadPosition
+	conn            net.Conn
+	aprsPosition    chan geospatial.Point
+	aprsMessage     chan string
+	concerned       map[string]bool // Callsigns that we want to listen for
+	connecting      bool
+	connectingMutex sync.Mutex
+	connected       bool
+	connectedMutex  sync.Mutex
+	remotetnc       *string
+	beaconint       *string
+	symbolTable     rune
+	symbolCode      rune
 }
 
 type PayloadPosition struct {
@@ -56,6 +59,18 @@ func (p *PayloadPosition) Get() geospatial.Point {
 	return p.pos
 }
 
+func (a *APRSTNC) IsConnected() bool {
+	a.connectedMutex.Lock()
+	defer a.connectedMutex.Unlock()
+	return a.connected
+}
+
+func (a *APRSTNC) Connected(c bool) {
+	a.connectedMutex.Lock()
+	defer a.connectedMutex.Unlock()
+	a.connected = c
+}
+
 func (a *APRSTNC) StartAPRS() {
 	log.Println("APRS.StartAPRS()")
 
@@ -75,20 +90,41 @@ func (a *APRSTNC) StartAPRS() {
 }
 
 func (a *APRSTNC) connectToNetworkTNC() {
-
 	var err error
 
-	log.Println("aprs::connectToNetworkTNC()")
+	// This mutex controls access to the boolean that indicates when a connect/reconnect
+	// attempt is in progress
+	a.connectingMutex.Lock()
 
-	for {
-		a.conn, err = net.Dial("tcp", *a.remotetnc)
-		if err != nil {
-			log.Printf("Could not connect to %v.  Error: %v", *a.remotetnc, err)
-			log.Println("Sleeping 5 seconds and trying again")
-			time.Sleep(5 * time.Second)
-		} else {
-			log.Printf("Connection to TNC %v successful", *a.remotetnc)
-			return
+	if a.connecting {
+		a.connectingMutex.Unlock()
+		log.Println("Skipping reconnect since a connection attempt is already in progress")
+		return
+	} else {
+		// A connection attempt is not in progress so we'll start a new one
+		a.connecting = true
+		a.connectingMutex.Unlock()
+
+		log.Println("Connecting to remote TNC ", *a.remotetnc)
+
+		for {
+			a.conn, err = net.Dial("tcp", *a.remotetnc)
+			if err != nil {
+				log.Printf("Could not connect to %v.  Error: %v", *a.remotetnc, err)
+				log.Println("Sleeping 5 seconds and trying again")
+				time.Sleep(5 * time.Second)
+			} else {
+				a.Connected(true)
+				log.Printf("Connection to TNC %v successful", a.conn.RemoteAddr())
+				a.conn.SetReadDeadline(time.Now().Add(time.Minute * 3))
+				a.connectingMutex.Lock()
+				// Now that we've connected, we're no longer "connecting".  If a connection fails
+				// and connectToNetworkTNC() is called now, it should trigger a reconnect, so we
+				// set a.connecting to false
+				a.connecting = false
+				a.connectingMutex.Unlock()
+				return
+			}
 		}
 	}
 }
@@ -121,6 +157,7 @@ func (a *APRSTNC) incomingAPRSEventHandler() {
 			// Retrieve a packet
 			msg, err := d.Next()
 			if err != nil {
+				a.Connected(false)
 				log.Printf("Error retrieving APRS message via KISS: %v", err)
 				log.Println("Attempting to reconnect to TNC")
 				// Reconnect to the TNC and break this inner loop so that a new Decoder
@@ -128,6 +165,9 @@ func (a *APRSTNC) incomingAPRSEventHandler() {
 				a.connectToNetworkTNC()
 				break
 			}
+
+			// Extend our read deadline
+			a.conn.SetReadDeadline(time.Now().Add(time.Minute * 3))
 
 			log.Printf("Incoming APRS packet received: %+v\n", msg)
 
@@ -236,7 +276,20 @@ func (a *APRSTNC) SendAPRSPacket(s string) error {
 		return fmt.Errorf("Unable to create packet: %v", err)
 	}
 
-	a.conn.Write(packet)
+	for {
+		_, err = a.conn.Write(packet)
+		if err != nil {
+			a.Connected(false)
+			log.Printf("Error writing to %v: %v", a.conn.RemoteAddr(), err)
+			log.Println("Attempting to reconnect to TNC")
+			// Reconnect to the TNC and break this inner loop so that a new Decoder
+			// is created over the new connection
+			a.connectToNetworkTNC()
+		} else {
+			// Write was successful, so we break the loop
+			break
+		}
+	}
 
 	return nil
 
