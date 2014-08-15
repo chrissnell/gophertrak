@@ -72,6 +72,10 @@ var (
 		Fg: termbox.ColorYellow | termbox.AttrBold,
 		Bg: termbox.ColorBlue,
 	}
+	RedOnBlueText Style = Style{
+		Fg: termbox.ColorRed | termbox.AttrBold,
+		Bg: termbox.ColorBlue,
+	}
 	CyanOnBlueText Style = Style{
 		Fg: termbox.ColorCyan | termbox.AttrBold,
 		Bg: termbox.ColorBlue,
