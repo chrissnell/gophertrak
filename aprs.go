@@ -14,7 +14,6 @@ import (
 )
 
 type APRSTNC struct {
-	wg              sync.WaitGroup
 	pr              PacketRing
 	pos             PayloadPosition
 	conn            net.Conn
