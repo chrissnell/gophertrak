@@ -19,8 +19,6 @@ const (
 )
 
 var (
-	remotegps    *string
-	remotetnc    *string
 	localtncport *string
 	ballooncall  *string
 	balloonssid  *string
@@ -33,7 +31,8 @@ var (
 
 func main() {
 
-	var g gps.GPSReading
+	// Set up a new GPS
+	g := new(gps.GPS)
 
 	// Set up a new TNC with our APRS symbol
 	a := new(APRSTNC)
@@ -45,7 +44,7 @@ func main() {
 	chasers["KF7FVH-1"] = true
 	chasers["KF7YVN-1"] = true
 
-	remotegps = flag.String("remotegps", "10.50.0.21:2947", "Remote gpsd server")
+	g.Remotegps = flag.String("remotegps", "10.50.0.21:2947", "Remote gpsd server")
 	a.remotetnc = flag.String("remotetnc", "10.50.0.25:6700", "Remote TNC server")
 	localtncport = flag.String("localtncport", "", "Local serial port for TNC, e.g. /dev/ttyUSB0")
 	ballooncall = flag.String("ballooncall", "", "Balloon Callsign")
@@ -55,6 +54,8 @@ func main() {
 	a.beaconint = flag.String("beaconint", "60", "APRS position beacon interval (secs)  Default: 60")
 	debug = flag.Bool("debug", false, "Enable debugging information")
 	flag.Parse()
+
+	g.Debug = debug
 
 	// Log to a file instead of stdout
 	f, err := os.OpenFile("gophertrak.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -78,13 +79,14 @@ func main() {
 	draw.SafeFlush()
 
 	// Start backend data gatherers
-	go gps.GPSRun(&g, *remotegps, debug)
+	go g.StartGPS()
 	go a.StartAPRS()
 
 	// Launch goroutines that update our interface with current data
-	go DrawMyChaseVehicleReadings(&g)
+	go DrawMyChaseVehicleReadings(&g.Reading)
 	go DrawPayloadReadings(&a.pos)
 	go DrawRecentPackets(&a.pr, x_size)
+	go monitorConnections(a, g, x_size, y_size)
 
 	for {
 		switch ev := termbox.PollEvent(); ev.Type {
@@ -270,7 +272,6 @@ func DrawStatusBar(x_size, y_size int) {
 	draw.PrintText(4, y_size, draw.WhiteOnBlueText, "TNC: 127.0.0.1:6700")
 
 	draw.PrintText(27, y_size, draw.WhiteOnBlueText, "GPS: 127.0.0.1:2947")
-	draw.PrintText(47, y_size, draw.YellowOnBlueText, "√")
 
 	draw.PrintText(52, y_size, draw.YellowOnBlueText, "[F1]")
 	draw.PrintText(57, y_size, draw.CyanOnBlueText, "Send Message")
@@ -322,6 +323,23 @@ func DrawRecentPackets(pr *PacketRing, width int) {
 			draw.PrintText(21, i+k, draw.WhiteText, v.pkt.OriginalBody)
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+func monitorConnections(a *APRSTNC, g *gps.GPS, x_size, y_size int) {
+	for {
+		if a.IsConnected() {
+			draw.PrintText(24, y_size, draw.YellowOnBlueText, "✓")
+		} else {
+			draw.PrintText(24, y_size, draw.RedOnBlueText, "✘")
+		}
+		if g.IsReady() {
+			draw.PrintText(47, y_size, draw.YellowOnBlueText, "✓")
+		} else {
+			draw.PrintText(47, y_size, draw.RedOnBlueText, "✘")
+		}
+		draw.SafeFlush()
+		time.Sleep(1 * time.Second)
 	}
 }
 
