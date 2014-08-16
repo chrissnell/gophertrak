@@ -84,7 +84,7 @@ func main() {
 
 	// Launch goroutines that update our interface with current data
 	go DrawMyChaseVehicleReadings(&g.Reading)
-	go DrawPayloadReadings(&a.pos)
+	go DrawPayloadReadings(a)
 	go DrawRecentPackets(&a.pr, x_size)
 	go monitorConnections(a, g, x_size, y_size)
 
@@ -112,13 +112,15 @@ func DrawOuterFrame(x_size, y_size int) {
 }
 
 func DrawPayloadTracker() {
+	payloadcall := fmt.Sprintf("%v-%v", *ballooncall, *balloonssid)
+
 	draw.PrintText(3, 2, draw.RedTitle, "PAYLOAD")
 	draw.PrintText(3, 4, draw.WhiteText, "CALLSIGN:")
-	draw.PrintText(14, 4, draw.WhiteText, "NW5W-7")
+	draw.PrintText(14, 4, draw.WhiteText, payloadcall)
 	draw.PrintText(3, 5, draw.WhiteText, "    LAST:")
-	draw.PrintText(14, 5, draw.GreenText, "28s")
+	draw.PrintText(14, 5, draw.WhiteText, "---------")
 	draw.PrintText(3, 6, draw.WhiteText, " BATTERY:")
-	draw.PrintText(14, 6, draw.YellowText, "4.7V")
+	draw.PrintText(14, 6, draw.YellowText, "-.-- V")
 	draw.PrintText(3, 8, draw.WhiteText, "ALTITUDE:")
 	draw.PrintText(14, 8, draw.WhiteText, "---------")
 	draw.PrintText(6, 9, draw.WhiteText, "SPEED:")
@@ -135,11 +137,28 @@ func DrawPayloadTracker() {
 	draw.PrintText(14, 14, draw.WhiteText, "-------°-")
 }
 
-func DrawPayloadReadings(pp *PayloadPosition) {
+func DrawPayloadReadings(a *APRSTNC) {
 	var latHemisphere, lonHemisphere rune
+	var lastHeard []PayloadPacket
 
 	for {
-		p := pp.Get()
+		// Fetch the timestamp of the most recent received packet
+		a.pr.Lock()
+		if a.pr.r.Value != nil {
+			lastHeard = []PayloadPacket{a.pr.r.Value.(PayloadPacket)}
+		}
+		a.pr.Unlock()
+
+		if len(lastHeard) > 0 {
+			log.Println("Time stamp:", time.Since(lastHeard[0].ts).String())
+			tr := regexp.MustCompile(`([\dhm]*)\.?\d*([ms]{1,2})$`)
+			matches := tr.FindStringSubmatch(time.Since(lastHeard[0].ts).String())
+			lastHeardTime := fmt.Sprintf("%s", matches[1]+matches[2])
+			draw.Blank(14, 24, 5, draw.Black)
+			draw.PrintText(14, 5, draw.GreenText, lastHeardTime)
+		}
+
+		p := a.pos.Get()
 		//log.Printf("Received new GPS point: %+v\n", p)
 		if p.Lat != 0 && p.Lon != 0 {
 
@@ -178,7 +197,7 @@ func DrawPayloadReadings(pp *PayloadPosition) {
 
 			draw.SafeFlush()
 		}
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 1)
 	}
 
 }
@@ -250,7 +269,7 @@ func DrawMyChaseVehicleReadings(g *gps.GPSReading) {
 			draw.PrintText(63, 6, draw.YellowText, crs)
 			draw.SafeFlush()
 		}
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 1)
 	}
 }
 
@@ -285,7 +304,7 @@ func DrawStatusBar(x_size, y_size int) {
 
 func DrawRecentPacketsTable() {
 	draw.PrintText(3, 16, draw.RedTitle, "RECENT PACKETS")
-	draw.PrintText(3, 18, draw.CyanTitle, "TIME   ")
+	draw.PrintText(3, 18, draw.CyanTitle, "AGE    ")
 	draw.PrintText(12, 18, draw.CyanTitle, "TYPE   ")
 	draw.PrintText(21, 18, draw.CyanTitle, "CONTENTS                                                    ")
 }
@@ -305,7 +324,8 @@ func DrawRecentPackets(pr *PacketRing, width int) {
 		for k, v := range recent {
 			//age := strconv.Itoa(int(time.Now().Unix()-v.ts.Unix())) + "s"
 
-			tr := regexp.MustCompile(`(.*)\..*(.)$`)
+			// tr := regexp.MustCompile(`([\dhm]*)\.\d*([ms]{1,2})$`)
+			tr := regexp.MustCompile(`([\dhm]*)\.?\d*([ms]{1,2})$`)
 			matches := tr.FindStringSubmatch(time.Since(v.ts).String())
 			timePadded := fmt.Sprintf("%7s", matches[1]+matches[2])
 			var pktType string
@@ -322,7 +342,7 @@ func DrawRecentPackets(pr *PacketRing, width int) {
 			draw.PrintText(12, i+k, draw.WhiteText, pktType)
 			draw.PrintText(21, i+k, draw.WhiteText, v.pkt.OriginalBody)
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }
 
