@@ -150,7 +150,6 @@ func DrawPayloadReadings(a *APRSTNC) {
 		a.pr.Unlock()
 
 		if len(lastHeard) > 0 {
-			log.Println("Time stamp:", time.Since(lastHeard[0].ts).String())
 			tr := regexp.MustCompile(`([\dhm]*)\.?\d*([ms]{1,2})$`)
 			matches := tr.FindStringSubmatch(time.Since(lastHeard[0].ts).String())
 			lastHeardTime := fmt.Sprintf("%s", matches[1]+matches[2])
