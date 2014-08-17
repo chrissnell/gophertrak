@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/chrissnell/GoBalloon/geospatial"
 	"github.com/chrissnell/GoBalloon/gps"
 	"github.com/chrissnell/gophertrak/draw"
 	"github.com/dustin/go-humanize"
@@ -83,7 +84,7 @@ func main() {
 	go a.StartAPRS()
 
 	// Launch goroutines that update our interface with current data
-	go DrawMyChaseVehicleReadings(&g.Reading)
+	go DrawMyChaseVehicleReadings(&g.Reading, a)
 	go DrawPayloadReadings(a)
 	go DrawRecentPackets(&a.pr, x_size)
 	go monitorConnections(a, g, x_size, y_size)
@@ -218,19 +219,9 @@ func DrawChaseConsole() {
 	draw.PrintText(32, 10, draw.CyanTitle, "CALLSIGN")
 	draw.PrintText(45, 10, draw.CyanTitle, "FROM ME         ")
 	draw.PrintText(65, 10, draw.CyanTitle, "FROM PAYLOAD    ")
-	draw.PrintText(32, 11, draw.WhiteText, "NW5W-4")
-	draw.PrintText(31, 11, draw.RedText, "*")
-	draw.PrintText(45, 11, draw.WhiteText, "N/A")
-	draw.PrintText(65, 11, draw.WhiteText, "27.9 mi @ 10°")
-	draw.PrintText(32, 12, draw.WhiteText, "KF7FVH-1")
-	draw.PrintText(45, 12, draw.WhiteText, "3.1 mi @ 173°")
-	draw.PrintText(65, 12, draw.WhiteText, "28.6 mi @ 11°")
-	draw.PrintText(32, 13, draw.WhiteText, "KF7YVN-1")
-	draw.PrintText(45, 13, draw.WhiteText, "- NOT HEARD -")
-	draw.PrintText(65, 13, draw.WhiteText, "- NOT HEARD -")
 }
 
-func DrawMyChaseVehicleReadings(g *gps.GPSReading) {
+func DrawMyChaseVehicleReadings(g *gps.GPSReading, a *APRSTNC) {
 	var latHemisphere, lonHemisphere rune
 
 	for {
@@ -268,6 +259,52 @@ func DrawMyChaseVehicleReadings(g *gps.GPSReading) {
 			draw.PrintText(63, 6, draw.YellowText, crs)
 			draw.SafeFlush()
 		}
+
+		ch := fmt.Sprintf("%v-%v", *chasercall, *chaserssid)
+		draw.PrintText(31, 11, draw.RedText, "*")
+		draw.PrintText(32, 11, draw.WhiteText, ch)
+		draw.PrintText(45, 11, draw.WhiteText, "N/A")
+
+		bl := fmt.Sprintf("%v-%v", *ballooncall, *balloonssid)
+
+		var balloonPos geospatial.Point
+
+		// Fetch the current balloon payload position, if it's not nil
+		a.lastPacketMu.Lock()
+		if _, exists := a.lastPacket[bl]; exists {
+			if a.lastPacket[bl].data.Position.Lat != 0 {
+				balloonPos = a.lastPacket[bl].data.Position
+			}
+		}
+		a.lastPacketMu.Unlock()
+
+		if balloonPos.Lat != 0 {
+			myPos := g.Get()
+			meDistToBalloon := myPos.GreatCircleDistanceTo(balloonPos)
+			meBearToBalloon := myPos.BearingTo(balloonPos)
+			draw.PrintText(65, 11, draw.WhiteText, fmt.Sprintf("%0.1f mi @ %v°", meDistToBalloon, meBearToBalloon))
+			i := 0
+			for k, _ := range chasers {
+				draw.PrintText(32, 12+i, draw.WhiteText, k)
+				if lp, exists := a.lastPacket[k]; exists {
+					if lp.data.Position.Lat != 0 {
+						meDistToChaser := myPos.GreatCircleDistanceTo(lp.data.Position)
+						meBearToChaser := myPos.BearingTo(lp.data.Position)
+						chaserDistToBln := lp.data.Position.GreatCircleDistanceTo(balloonPos)
+						chaserBearToBln := lp.data.Position.BearingTo(balloonPos)
+						draw.PrintText(32, 12+i, draw.WhiteText, lp.pkt.Source.String())
+						draw.PrintText(45, 12+i, draw.WhiteText, fmt.Sprintf("%0.1f mi @ %v°", meDistToChaser, meBearToChaser))
+						draw.PrintText(65, 12+i, draw.WhiteText, fmt.Sprintf("%0.1f mi @ %v°", chaserDistToBln, chaserBearToBln))
+						i++
+					}
+				} else {
+					draw.PrintText(45, 12+i, draw.WhiteText, "- NOT HEARD -")
+					draw.PrintText(65, 12+i, draw.WhiteText, "- NOT HEARD -")
+					i++
+				}
+			}
+		}
+
 		time.Sleep(time.Second * 1)
 	}
 }

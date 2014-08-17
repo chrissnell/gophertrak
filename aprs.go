@@ -20,6 +20,8 @@ type APRSTNC struct {
 	aprsPosition    chan geospatial.Point
 	aprsMessage     chan string
 	concerned       map[string]bool // Callsigns that we want to listen for
+	lastPacket      map[string]PayloadPacket
+	lastPacketMu    sync.Mutex
 	connecting      bool
 	connectingMutex sync.Mutex
 	connected       bool
@@ -79,6 +81,7 @@ func (a *APRSTNC) StartAPRS() {
 	a.aprsMessage = make(chan string)
 	a.aprsPosition = make(chan geospatial.Point)
 	a.concerned = make(map[string]bool)
+	a.lastPacket = make(map[string]PayloadPacket)
 
 	// Block on setting up a new connection to the TNC
 	a.connectToNetworkTNC()
@@ -175,10 +178,14 @@ func (a *APRSTNC) incomingAPRSEventHandler() {
 
 			// If this packet is from a source that we care about, add it to our ring
 			if a.concerned[msg.Source.String()] {
+				pp := PayloadPacket{data: *ad, pkt: msg, ts: time.Now()}
 				a.pr.Lock()
 				a.pr.r = a.pr.r.Prev()
-				a.pr.r.Value = PayloadPacket{data: *ad, pkt: msg, ts: time.Now()}
+				a.pr.r.Value = pp
 				a.pr.Unlock()
+				a.lastPacketMu.Lock()
+				a.lastPacket[msg.Source.String()] = pp
+				a.lastPacketMu.Unlock()
 			}
 
 			if ad.Position.Lon != 0 {
