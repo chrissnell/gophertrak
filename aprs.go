@@ -60,6 +60,19 @@ func (p *PayloadPosition) Get() geospatial.Point {
 	return p.pos
 }
 
+func (a *APRSTNC) RingAsSlice() []PayloadPacket {
+	var recent []PayloadPacket
+	a.pr.Lock()
+	a.pr.r.Do(func(x interface{}) {
+		if x != nil {
+			recent = append(recent, x.(PayloadPacket))
+		}
+	})
+	a.pr.Unlock()
+
+	return recent
+}
+
 func (a *APRSTNC) IsConnected() bool {
 	a.connectedMutex.Lock()
 	defer a.connectedMutex.Unlock()
