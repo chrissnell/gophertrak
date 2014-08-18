@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"sort"
 	"time"
 )
 
@@ -44,6 +45,7 @@ func main() {
 	// for now, we'll just define them here.
 	chasers["KF7FVH-1"] = true
 	chasers["KF7YVN-1"] = true
+	chasers["A7COG-2"] = true
 
 	g.Remotegps = flag.String("remotegps", "10.50.0.21:2947", "Remote gpsd server")
 	a.remotetnc = flag.String("remotetnc", "10.50.0.25:6700", "Remote TNC server")
@@ -86,7 +88,7 @@ func main() {
 	// Launch goroutines that update our interface with current data
 	go DrawMyChaseVehicleReadings(&g.Reading, a)
 	go DrawPayloadReadings(a)
-	go DrawRecentPackets(&a.pr, x_size)
+	go DrawRecentPackets(a, x_size)
 	go monitorConnections(a, g, x_size, y_size)
 
 	for {
@@ -131,7 +133,6 @@ func DrawPayloadTracker() {
 	draw.PrintText(19, 10, draw.CyanText, "•")
 
 	draw.PrintText(5, 12, draw.WhiteText, "ELEV Δ:")
-	rate(-800)
 
 	draw.PrintText(3, 14, draw.WhiteText, "------°-")
 	draw.PrintText(12, 14, draw.PurpleText, "/")
@@ -140,26 +141,32 @@ func DrawPayloadTracker() {
 
 func DrawPayloadReadings(a *APRSTNC) {
 	var latHemisphere, lonHemisphere rune
-	var lastHeard []PayloadPacket
 
 	for {
-		// Fetch the timestamp of the most recent received packet
-		a.pr.Lock()
-		if a.pr.r.Value != nil {
-			lastHeard = []PayloadPacket{a.pr.r.Value.(PayloadPacket)}
-		}
-		a.pr.Unlock()
 
-		if len(lastHeard) > 0 {
+		recent := a.RingAsSlice()
+
+		if len(recent) > 0 {
+			lastHeard := recent[0]
+
 			tr := regexp.MustCompile(`([\dhm]*)\.?\d*([ms]{1,2})$`)
-			matches := tr.FindStringSubmatch(time.Since(lastHeard[0].ts).String())
+			matches := tr.FindStringSubmatch(time.Since(lastHeard.ts).String())
 			lastHeardTime := fmt.Sprintf("%s", matches[1]+matches[2])
 			draw.Blank(14, 24, 5, draw.Black)
 			draw.PrintText(14, 5, draw.GreenText, lastHeardTime)
 		}
 
+		if len(recent) >= 3 {
+			if recent[0].data.Position.Altitude != 0 && recent[1].data.Position.Altitude != 0 && recent[2].data.Position.Altitude != 0 {
+				d1 := int64(recent[0].data.Position.Altitude - recent[1].data.Position.Altitude)
+				d2 := int64(recent[1].data.Position.Altitude - recent[2].data.Position.Altitude)
+				rate := (d1 + d2) * 60 / (recent[0].ts.Unix() - recent[2].ts.Unix())
+				drawRate(int(rate))
+			}
+		}
+
 		p := a.pos.Get()
-		//log.Printf("Received new GPS point: %+v\n", p)
+
 		if p.Lat != 0 && p.Lon != 0 {
 
 			if p.Lat > 0 {
@@ -224,6 +231,14 @@ func DrawChaseConsole() {
 func DrawMyChaseVehicleReadings(g *gps.GPSReading, a *APRSTNC) {
 	var latHemisphere, lonHemisphere rune
 
+	var sortedChasers []string
+
+	for ck := range chasers {
+		sortedChasers = append(sortedChasers, ck)
+	}
+
+	sort.Strings(sortedChasers)
+
 	for {
 		p := g.Get()
 		//log.Printf("Received new GPS point: %+v\n", p)
@@ -284,9 +299,9 @@ func DrawMyChaseVehicleReadings(g *gps.GPSReading, a *APRSTNC) {
 			meBearToBalloon := myPos.BearingTo(balloonPos)
 			draw.PrintText(65, 11, draw.WhiteText, fmt.Sprintf("%0.1f mi @ %v°", meDistToBalloon, meBearToBalloon))
 			i := 0
-			for k, _ := range chasers {
-				draw.PrintText(32, 12+i, draw.WhiteText, k)
-				if lp, exists := a.lastPacket[k]; exists {
+			for _, v := range sortedChasers {
+				draw.PrintText(32, 12+i, draw.WhiteText, v)
+				if lp, exists := a.lastPacket[v]; exists {
 					if lp.data.Position.Lat != 0 {
 						meDistToChaser := myPos.GreatCircleDistanceTo(lp.data.Position)
 						meBearToChaser := myPos.BearingTo(lp.data.Position)
@@ -345,22 +360,13 @@ func DrawRecentPacketsTable() {
 	draw.PrintText(21, 18, draw.CyanTitle, "CONTENTS                                                    ")
 }
 
-func DrawRecentPackets(pr *PacketRing, width int) {
+func DrawRecentPackets(a *APRSTNC, width int) {
 	for {
-		var recent []PayloadPacket
-		pr.Lock()
-		pr.r.Do(func(x interface{}) {
-			if x != nil {
-				recent = append(recent, x.(PayloadPacket))
-			}
-		})
-		pr.Unlock()
+
+		recent := a.RingAsSlice()
 
 		i := 19
 		for k, v := range recent {
-			//age := strconv.Itoa(int(time.Now().Unix()-v.ts.Unix())) + "s"
-
-			// tr := regexp.MustCompile(`([\dhm]*)\.\d*([ms]{1,2})$`)
 			tr := regexp.MustCompile(`([\dhm]*)\.?\d*([ms]{1,2})$`)
 			matches := tr.FindStringSubmatch(time.Since(v.ts).String())
 			timePadded := fmt.Sprintf("%7s", matches[1]+matches[2])
@@ -421,13 +427,16 @@ func directionalArrow(h int) string {
 	}
 }
 
-func rate(r int) {
+func drawRate(r int) {
+	draw.Blank(14, 31, 12, draw.Black)
+	rate := fmt.Sprintf("%v", r)
 	if r >= 0 {
 		draw.PrintText(14, 12, draw.GreenText, "+")
-		draw.PrintText(15, 12, draw.GreenText, fmt.Sprintf("%v", r))
+		draw.PrintText(15, 12, draw.GreenText, rate)
+		draw.PrintText(16+len(rate), 12, draw.WhiteText, "ft/min")
 	} else if r < 0 {
 		r = 0 - r
-		draw.PrintText(14, 12, draw.RedText, "-")
-		draw.PrintText(15, 12, draw.RedText, fmt.Sprintf("%v", r))
+		draw.PrintText(15, 12, draw.RedText, rate)
+		draw.PrintText(16+len(rate), 12, draw.WhiteText, "ft/min")
 	}
 }
