@@ -3,7 +3,8 @@ gophertrak
 
 A colorful console-based tracker for APRS-enabled high altitude balloons.   
 
-![GopherTrak](https://dl.dropboxusercontent.com/u/16837290/Ham%20Radio/gophertrak.png)
+![GopherTrak](https://chrissnell.com/images/github/gophertrak.png)
+
 
 What Works
 ----------
